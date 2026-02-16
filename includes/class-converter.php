@@ -215,10 +215,10 @@ final class Converter {
 
 		// Determine better source based on WordPress logic (if enabled).
 		[$sourcePath, $targetDimensions] = $this->getConversionData( $path );
-		return $this->convertToAvif( $sourcePath, $avifPath, $targetDimensions );
+		return $this->convertToAvif( $sourcePath, $avifPath, $targetDimensions, null, $path );
 	}
 
-	private function convertToAvif( string $sourcePath, string $avifPath, ?array $targetDimensions, ?AvifSettings $settings = null ): ConversionResult {
+	private function convertToAvif( string $sourcePath, string $avifPath, ?array $targetDimensions, ?AvifSettings $settings = null, ?string $referenceJpegPath = null ): ConversionResult {
 		$start_time = microtime( true );
 		$settings   = $settings ?? AvifSettings::fromOptions();
 
@@ -232,7 +232,7 @@ final class Converter {
 		if ( ! $settings->disableMemoryCheck ) {
 			$memoryWarning = $this->check_memory_safe( $sourcePath );
 			if ( $memoryWarning ) {
-				$this->log_conversion( 'error', $sourcePath, $avifPath, 'none', $start_time, $memoryWarning, $settings->toArray() );
+				$this->log_conversion( 'error', $sourcePath, $avifPath, 'none', $start_time, $memoryWarning, $settings->toArray(), $referenceJpegPath );
 				return ConversionResult::failure( $memoryWarning );
 			}
 		}
@@ -274,7 +274,7 @@ final class Converter {
 
 		if ( empty( $encodersToTry ) ) {
 			$msg = 'No available encoders found.';
-			$this->log_conversion( 'error', $sourcePath, $avifPath, 'none', $start_time, $msg, $settings->toArray() );
+			$this->log_conversion( 'error', $sourcePath, $avifPath, 'none', $start_time, $msg, $settings->toArray(), $referenceJpegPath );
 			return ConversionResult::failure( $msg );
 		}
 
@@ -289,7 +289,7 @@ final class Converter {
 			if ( $result->success ) {
 				// Invalidate file existence cache for this path so Support class sees the new file.
 				$this->invalidateFileCache( $avifPath );
-				$this->log_conversion( 'success', $sourcePath, $avifPath, $engineUsed, $start_time, null, $settings->toArray() );
+				$this->log_conversion( 'success', $sourcePath, $avifPath, $engineUsed, $start_time, null, $settings->toArray(), $referenceJpegPath );
 				return ConversionResult::success();
 			}
 
@@ -306,7 +306,7 @@ final class Converter {
 			$details['error_suggestion'] = $suggestion;
 		}
 
-		$this->log_conversion( 'error', $sourcePath, $avifPath, $engineUsed, $start_time, $errorMsg, $details );
+		$this->log_conversion( 'error', $sourcePath, $avifPath, $engineUsed, $start_time, $errorMsg, $details, $referenceJpegPath );
 		return ConversionResult::failure( $errorMsg ?? 'Unknown error', $suggestion );
 	}
 
@@ -323,7 +323,7 @@ final class Converter {
 		}
 
 		[$sourcePath, $targetDimensions] = $this->getConversionData( $jpegPath );
-		return $this->convertToAvif( $sourcePath, $avifPath, $targetDimensions, $settings );
+		return $this->convertToAvif( $sourcePath, $avifPath, $targetDimensions, $settings, $jpegPath );
 	}
 
 	/**
@@ -485,7 +485,8 @@ final class Converter {
 				'posts_per_page'         => -1,
 				'fields'                 => 'ids',
 				'no_found_rows'          => true,
-				'update_post_meta_cache' => false,
+				// Prime metadata once to avoid per-attachment lookups inside the loop.
+				'update_post_meta_cache' => true,
 				'update_post_term_cache' => false,
 				'cache_results'          => false,
 			)
@@ -514,9 +515,75 @@ final class Converter {
 			}
 			++$count;
 		}
+		$uploadsCount = $this->scanUploadsJpegsIfMissingAvif( $count, $cli );
 		if ( $cli && defined( 'WP_CLI' ) && \WP_CLI ) {
-			\WP_CLI::success( "Scanned attachments: {$count}" );
+			\WP_CLI::success( "Scanned attachments: {$count}; scanned uploads JPEGs: {$uploadsCount}" );
 		}
+	}
+
+	/**
+	 * Scan wp-content/uploads recursively and convert any JPEG without a matching AVIF.
+	 * This catches files created outside attachment metadata (for example theme/plugin-generated sizes).
+	 *
+	 * @param int  $startingCount Number of attachments already processed, for stop/log messaging.
+	 * @param bool $cli Whether the scan is running in WP-CLI context.
+	 * @return int Number of JPEG files scanned in uploads.
+	 */
+	private function scanUploadsJpegsIfMissingAvif( int $startingCount, bool $cli ): int {
+		$uploadDir = wp_upload_dir();
+		$baseDir   = trailingslashit( (string) ( $uploadDir['basedir'] ?? '' ) );
+		if ( '' === $baseDir || ! is_dir( $baseDir ) ) {
+			return 0;
+		}
+
+		try {
+			$iterator = new \RecursiveIteratorIterator(
+				new \RecursiveDirectoryIterator(
+					$baseDir,
+					\FilesystemIterator::SKIP_DOTS | \FilesystemIterator::CURRENT_AS_FILEINFO
+				),
+				\RecursiveIteratorIterator::LEAVES_ONLY
+			);
+		} catch ( \UnexpectedValueException $e ) {
+			return 0;
+		}
+
+		$count = 0;
+		$seen  = array();
+		foreach ( $iterator as $entry ) {
+			if ( ! ( $entry instanceof \SplFileInfo ) || ! $entry->isFile() ) {
+				continue;
+			}
+
+			// Respect stop requests during long recursive scans.
+			if ( \get_transient( 'aviflosu_stop_conversion' ) ) {
+				if ( $cli && defined( 'WP_CLI' ) && \WP_CLI ) {
+					$processed = $startingCount + $count;
+					\WP_CLI::warning( "Conversion stopped by user after {$processed} files." );
+				}
+				\delete_transient( 'aviflosu_stop_conversion' );
+				return $count;
+			}
+
+			$path = (string) $entry->getPathname();
+			if ( ! preg_match( '/\.(jpe?g)$/i', $path ) ) {
+				continue;
+			}
+			if ( ! file_exists( $path ) ) {
+				continue;
+			}
+
+			$realPath = (string) ( @realpath( $path ) ?: $path );
+			if ( isset( $seen[ $realPath ] ) ) {
+				continue;
+			}
+			$seen[ $realPath ] = true;
+
+			$this->checkMissingAvif( $realPath );
+			++$count;
+		}
+
+		return $count;
 	}
 
 	private function convertGeneratedSizesForce( array $metadata, int $attachmentId ): void {
@@ -789,7 +856,7 @@ final class Converter {
 	/**
 	 * Log conversion attempt with all relevant details
 	 */
-	private function log_conversion( string $status, string $sourcePath, string $avifPath, string $engine_used, float $start_time, ?string $error_message = null, ?array $details = null ): void {
+	private function log_conversion( string $status, string $sourcePath, string $avifPath, string $engine_used, float $start_time, ?string $error_message = null, ?array $details = null, ?string $referenceJpegPath = null ): void {
 		// Skip logging if neither plugin nor logger is available
 		if ( ! $this->plugin && ! $this->logger ) {
 			return;
@@ -798,14 +865,32 @@ final class Converter {
 		$end_time = microtime( true );
 		$duration = round( ( $end_time - $start_time ) * 1000, 2 ); // Convert to milliseconds
 
+		$comparisonPath = ( is_string( $referenceJpegPath ) && '' !== $referenceJpegPath && file_exists( $referenceJpegPath ) )
+			? $referenceJpegPath
+			: $sourcePath;
+		$sourceSize = file_exists( $comparisonPath ) ? (int) filesize( $comparisonPath ) : 0;
+		$targetSize = file_exists( $avifPath ) ? (int) filesize( $avifPath ) : 0;
+
 		$logDetails = array(
-			'source_file' => basename( $sourcePath ),
+			'source_file' => basename( $comparisonPath ),
 			'target_file' => basename( $avifPath ),
 			'engine_used' => $engine_used,
 			'duration_ms' => $duration,
-			'source_size' => file_exists( $sourcePath ) ? filesize( $sourcePath ) : 0,
-			'target_size' => file_exists( $avifPath ) ? filesize( $avifPath ) : 0,
+			'source_size' => $sourceSize,
+			'target_size' => $targetSize,
 		);
+		if ( basename( $comparisonPath ) !== basename( $sourcePath ) ) {
+			$logDetails['encoded_from'] = basename( $sourcePath );
+		}
+
+		$sourceUrl = $this->pathToUploadsUrl( $comparisonPath );
+		if ( '' !== $sourceUrl ) {
+			$logDetails['source_url'] = $sourceUrl;
+		}
+		$targetUrl = $this->pathToUploadsUrl( $avifPath );
+		if ( '' !== $targetUrl ) {
+			$logDetails['target_url'] = $targetUrl;
+		}
 
 		if ( $details !== null ) {
 			// Avoid logging overly noisy or sensitive details (env vars / secrets).
@@ -818,8 +903,8 @@ final class Converter {
 		}
 
 		$message = $status === 'success'
-			? 'Successfully converted ' . basename( $sourcePath ) . " to AVIF using $engine_used"
-			: 'Failed to convert ' . basename( $sourcePath ) . " to AVIF using $engine_used";
+			? 'Successfully converted ' . basename( $comparisonPath ) . " to AVIF using $engine_used"
+			: 'Failed to convert ' . basename( $comparisonPath ) . " to AVIF using $engine_used";
 
 		if ( $error_message ) {
 			$message .= ": $error_message";
@@ -831,6 +916,31 @@ final class Converter {
 		} elseif ( $this->plugin ) {
 			$this->plugin->add_log( $status, $message, $logDetails );
 		}
+	}
+
+	/**
+	 * Convert an absolute uploads path into a public uploads URL.
+	 */
+	private function pathToUploadsUrl( string $path ): string {
+		if ( '' === $path ) {
+			return '';
+		}
+
+		$uploads = wp_upload_dir();
+		$baseDir = trailingslashit( (string) ( $uploads['basedir'] ?? '' ) );
+		$baseUrl = trailingslashit( (string) ( $uploads['baseurl'] ?? '' ) );
+		if ( '' === $baseDir || '' === $baseUrl ) {
+			return '';
+		}
+
+		$normalizedPath = str_replace( '\\', '/', $path );
+		$normalizedBase = str_replace( '\\', '/', $baseDir );
+		if ( ! str_starts_with( $normalizedPath, $normalizedBase ) ) {
+			return '';
+		}
+
+		$relative = ltrim( substr( $normalizedPath, strlen( $normalizedBase ) ), '/' );
+		return $baseUrl . str_replace( ' ', '%20', $relative );
 	}
 
 	/**
