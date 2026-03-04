@@ -134,4 +134,13 @@ final class Environment {
 
 		return 1;
 	}
+
+	/**
+	 * Recommended default thread limit:
+	 * one less than detected cores, but never below 1.
+	 */
+	public static function detectRecommendedThreadLimit(): int {
+		$cores = self::detectCpuCoreCount();
+		return max( 1, $cores - 1 );
+	}
 }

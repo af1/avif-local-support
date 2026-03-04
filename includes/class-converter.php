@@ -96,6 +96,7 @@ final class Converter {
 		$this->maybe_schedule_daily();
 		add_action( 'aviflosu_daily_event', array( $this, 'run_daily_scan' ) );
 		add_action( 'aviflosu_run_on_demand', array( $this, 'run_on_demand_scan' ) );
+		add_action( 'aviflosu_convert_attachment_event', array( $this, 'run_attachment_conversion_background' ), 10, 1 );
 
 		// Deletion: keep .avif companions in sync when media is removed.
 		add_action( 'delete_attachment', array( $this, 'deleteAvifsForAttachment' ) );
@@ -169,15 +170,12 @@ final class Converter {
 			return $metadata;
 		}
 
-		$convertOnUpload      = (bool) get_option( 'aviflosu_convert_on_upload', true );
+		$convertOnUpload      = (bool) get_option( 'aviflosu_convert_on_upload', false );
 		$lqipGenerateOnUpload = (bool) get_option( 'aviflosu_lqip_generate_on_upload', true );
 
 		// AVIF Conversion
 		if ( $convertOnUpload ) {
-			$uploadDir = wp_upload_dir();
-			$baseDir   = trailingslashit( $uploadDir['basedir'] ?? '' );
-			// De-duped: convert original and sizes via shared helper.
-			$this->convertFromMetadata( $metadata, $baseDir );
+			$this->queueAttachmentConversion( $attachmentId );
 		}
 
 		// Generate ThumbHash placeholders if enabled globally AND triggered on upload.
@@ -189,20 +187,53 @@ final class Converter {
 	}
 
 	public function convertOriginalOnUpload( array $file ): array {
-		$convertOnUpload = (bool) get_option( 'aviflosu_convert_on_upload', true );
+		$convertOnUpload = (bool) get_option( 'aviflosu_convert_on_upload', false );
 		if ( ! $convertOnUpload ) {
 			return $file;
 		}
-		$type           = isset( $file['type'] ) && is_string( $file['type'] ) ? strtolower( $file['type'] ) : '';
-		$path           = isset( $file['file'] ) && is_string( $file['file'] ) ? $file['file'] : '';
-		$allowedMimes   = array( 'image/jpeg', 'image/jpg', 'image/pjpeg' );
-		$hasAllowedMime = in_array( $type, $allowedMimes, true );
-		$hasJpegExt     = '' !== $path && preg_match( '/\.(jpe?g)$/i', $path ) === 1;
-		if ( ! $hasAllowedMime && ! $hasJpegExt ) {
-			return $file;
-		}
-		$this->checkMissingAvif( $path );
+		// Always non-blocking: conversion is queued from metadata hook once attachment exists.
 		return $file;
+	}
+
+	/**
+	 * Queue a single attachment conversion run in the background.
+	 */
+	private function queueAttachmentConversion( int $attachmentId ): void {
+		if ( $attachmentId <= 0 ) {
+			return;
+		}
+		$args = array( $attachmentId );
+		if ( false === wp_next_scheduled( 'aviflosu_convert_attachment_event', $args ) ) {
+			wp_schedule_single_event( time() + 5, 'aviflosu_convert_attachment_event', $args );
+		}
+	}
+
+	/**
+	 * Background worker: convert original and generated sizes for one attachment.
+	 *
+	 * @param int|string $attachmentId Attachment ID passed from WP-Cron.
+	 */
+	public function run_attachment_conversion_background( $attachmentId ): void {
+		$id = (int) $attachmentId;
+		if ( $id <= 0 ) {
+			return;
+		}
+		if ( ! $this->isJpegMime( get_post_mime_type( $id ) ) ) {
+			return;
+		}
+
+		$metadata = wp_get_attachment_metadata( $id );
+		if ( is_array( $metadata ) ) {
+			$uploadDir = wp_upload_dir();
+			$baseDir   = trailingslashit( $uploadDir['basedir'] ?? '' );
+			$this->convertFromMetadata( $metadata, $baseDir );
+			return;
+		}
+
+		$path = get_attached_file( $id );
+		if ( is_string( $path ) && '' !== $path ) {
+			$this->checkMissingAvif( $path );
+		}
 	}
 
 	private function checkMissingAvif( string $path ): ?ConversionResult {

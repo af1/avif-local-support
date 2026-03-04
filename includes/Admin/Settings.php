@@ -67,7 +67,7 @@ final class Settings
 			'aviflosu_convert_on_upload',
 			array(
 				'type' => 'boolean',
-				'default' => true,
+				'default' => false,
 				'sanitize_callback' => 'rest_sanitize_boolean',
 				'show_in_rest' => true,
 			)
@@ -221,7 +221,7 @@ final class Settings
 			'aviflosu_cli_threads',
 			array(
 				'type' => 'integer',
-				'default' => 0,
+				'default' => Environment::detectRecommendedThreadLimit(),
 				'sanitize_callback' => array($this, 'sanitizeCliThreads'),
 				'show_in_rest' => true,
 			)
@@ -571,7 +571,7 @@ final class Settings
 	public function sanitizeCliThreads($value): int
 	{
 		$sanitized = (int) ($value ?? 0);
-		return max(0, min(256, $sanitized));
+		return max(1, min(256, $sanitized));
 	}
 
 	public function sanitizeLargerRetryCount($value): int
@@ -616,11 +616,11 @@ final class Settings
 
 	public function renderConvertOnUploadField(): void
 	{
-		$value = (bool) get_option('aviflosu_convert_on_upload', true);
+		$value = (bool) get_option('aviflosu_convert_on_upload', false);
 		echo '<label for="aviflosu_convert_on_upload">';
 		echo '<input id="aviflosu_convert_on_upload" type="checkbox" name="aviflosu_convert_on_upload" value="1" ' . checked(true, $value, false) . ' /> ';
 		echo esc_html__('Convert uploaded JPEG files to AVIF', 'avif-local-support');
-		$this->renderHelpTip(__('Can slow uploads on low-resource servers.', 'avif-local-support'));
+		$this->renderHelpTip(__('Runs in the background via WP-Cron to avoid blocking uploads.', 'avif-local-support'));
 		echo '</label>';
 	}
 
@@ -751,9 +751,9 @@ final class Settings
 	{
 		$cliPath = (string) get_option('aviflosu_cli_path', '');
 		$cliArgs = (string) get_option('aviflosu_cli_args', '');
-		$cliThreads = max(0, min(256, (int) get_option('aviflosu_cli_threads', 0)));
+		$cliThreads = max(1, min(256, (int) get_option('aviflosu_cli_threads', Environment::detectRecommendedThreadLimit())));
 		$cpuCores = Environment::detectCpuCoreCount();
-		$suggestedThreads = max(1, $cpuCores - 1);
+		$suggestedThreads = Environment::detectRecommendedThreadLimit();
 
 		// Suppress any output/errors from diagnostic methods.
 		ob_start();
@@ -809,9 +809,9 @@ final class Settings
 
 		// CLI Thread cap.
 		echo '<p><label for="aviflosu_cli_threads">' . esc_html__('CLI thread limit', 'avif-local-support');
-		$this->renderHelpTip(__('Limits ImageMagick CLI thread usage. 0 = automatic (no explicit cap).', 'avif-local-support'));
+		$this->renderHelpTip(__('Limits ImageMagick CLI thread usage.', 'avif-local-support'));
 		echo '</label><br>';
-		echo '<input type="number" id="aviflosu_cli_threads" name="aviflosu_cli_threads" min="0" max="256" value="' . esc_attr((string) $cliThreads) . '" class="small-text" />';
+		echo '<input type="number" id="aviflosu_cli_threads" name="aviflosu_cli_threads" min="1" max="256" value="' . esc_attr((string) $cliThreads) . '" class="small-text" />';
 		echo '<br><small class="description">' . sprintf(
 			/* translators: 1: detected core count, 2: suggested thread count */
 			esc_html__('Detected CPU cores: %1$d. Suggested cap to reduce CPU spikes: %2$d.', 'avif-local-support'),

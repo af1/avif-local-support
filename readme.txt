@@ -3,7 +3,7 @@ Contributors: ddegner, af1
 Tags: avif, images, performance, media, optimization
 Requires at least: 6.8
 Tested up to: 6.9
-Stable tag: 0.6.4-extended.3
+Stable tag: 0.6.5-extended.1
 Requires PHP: 8.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -87,3 +87,7 @@ License details:
 
 = 0.6.4-extended.3 =
 - Updated logs header quality display to show final retry quality used for AVIF output.
+
+= 0.6.5-extended.1 =
+- Added Conversion Insights panel under Logs with live run, queue, health, and size metrics.
+- Updated progress to show overall AVIF completion and throughput based on created AVIF files.

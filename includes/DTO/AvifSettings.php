@@ -90,14 +90,14 @@ final class AvifSettings {
 		$disableMemoryCheck = (bool) get_option( 'aviflosu_disable_memory_check', false );
 
 		$lossless           = ( $quality >= 100 );
-		$convertOnUpload    = (bool) get_option( 'aviflosu_convert_on_upload', true );
+		$convertOnUpload    = (bool) get_option( 'aviflosu_convert_on_upload', false );
 		$convertViaSchedule = (bool) get_option( 'aviflosu_convert_via_schedule', true );
 
 		$cliArgs = (string) get_option( 'aviflosu_cli_args', '' );
 		// Default environment if not set
 		$defaultEnv = Environment::buildDefaultEnvString();
 		$cliEnv     = (string) get_option( 'aviflosu_cli_env', $defaultEnv );
-		$cliThreads = max( 0, min( 256, (int) get_option( 'aviflosu_cli_threads', 0 ) ) );
+		$cliThreads = max( 1, min( 256, (int) get_option( 'aviflosu_cli_threads', Environment::detectRecommendedThreadLimit() ) ) );
 		$keepLargerAvif       = (bool) get_option( 'aviflosu_keep_larger_avif', true );
 		$largerRetryCount     = max( 0, min( 10, (int) get_option( 'aviflosu_larger_retry_count', 3 ) ) );
 		$largerRetryQualityStep = max( 1, min( 20, (int) get_option( 'aviflosu_larger_retry_quality_step', 4 ) ) );

@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Plugin Name: AVIF Local Support Extended
  * Plugin URI: https://github.com/ddegner/avif-local-support
  * Description: High-quality AVIF image conversion for WordPress — local, quality-first.
- * Version: 0.6.4-extended.3
+ * Version: 0.6.5-extended.1
  * Author: ddegner, af1
  * Author URI: https://www.daviddegner.com
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ declare(strict_types=1);
 \defined('ABSPATH') || exit;
 
 // Define constants
-\define('AVIFLOSU_VERSION', '0.6.4-extended.3');
+\define('AVIFLOSU_VERSION', '0.6.5-extended.1');
 \define('AVIFLOSU_PLUGIN_FILE', __FILE__);
 \define('AVIFLOSU_PLUGIN_DIR', plugin_dir_path(__FILE__));
 \define('AVIFLOSU_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -99,7 +99,7 @@ function aviflosu_activate(): void
 	// Ensure defaults
 	add_option('aviflosu_enable_support', true);
 	add_option('aviflosu_enable_background_images', true);
-	add_option('aviflosu_convert_on_upload', true);
+	add_option('aviflosu_convert_on_upload', false);
 	add_option('aviflosu_convert_via_schedule', true);
 	add_option('aviflosu_schedule_time', '01:00');
 	add_option('aviflosu_quality', 83);
@@ -112,6 +112,7 @@ function aviflosu_activate(): void
 	// Engine selection defaults
 	add_option('aviflosu_engine_mode', 'auto');
 	add_option('aviflosu_cli_path', '');
+	add_option('aviflosu_cli_threads', \Ddegner\AvifLocalSupport\Environment::detectRecommendedThreadLimit());
 	// LQIP (ThumbHash) settings
 	add_option('aviflosu_thumbhash_enabled', false);
 	add_option('aviflosu_lqip_generate_on_upload', true);
@@ -125,6 +126,7 @@ function aviflosu_deactivate(): void
 	// Clear any scheduled events created by this plugin
 	\wp_clear_scheduled_hook('aviflosu_daily_event');
 	\wp_clear_scheduled_hook('aviflosu_run_on_demand');
+	\wp_clear_scheduled_hook('aviflosu_convert_attachment_event');
 	\delete_transient('aviflosu_stop_lqip_generation');
 }
 

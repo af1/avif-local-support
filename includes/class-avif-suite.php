@@ -217,7 +217,7 @@ final class Plugin {
 
 		$settings = array(
 			'engine_mode'       => (string) get_option( 'aviflosu_engine_mode', 'auto' ),
-			'convert_on_upload' => (bool) get_option( 'aviflosu_convert_on_upload', true ),
+			'convert_on_upload' => (bool) get_option( 'aviflosu_convert_on_upload', false ),
 			'schedule_enabled'  => (bool) get_option( 'aviflosu_convert_via_schedule', true ),
 			'schedule_time'     => (string) get_option( 'aviflosu_schedule_time', '01:00' ),
 			'frontend_enabled'  => (bool) get_option( 'aviflosu_enable_support', true ),
@@ -360,7 +360,7 @@ final class Plugin {
 		// Reset options to defaults.
 		update_option( 'aviflosu_enable_support', true );
 		update_option( 'aviflosu_enable_background_images', true );
-		update_option( 'aviflosu_convert_on_upload', true );
+		update_option( 'aviflosu_convert_on_upload', false );
 		update_option( 'aviflosu_convert_via_schedule', true );
 		update_option( 'aviflosu_schedule_time', '01:00' );
 		update_option( 'aviflosu_quality', 83 );
@@ -372,6 +372,7 @@ final class Plugin {
 		update_option( 'aviflosu_disable_memory_check', false );
 		update_option( 'aviflosu_engine_mode', 'auto' );
 		update_option( 'aviflosu_cli_path', '' );
+		update_option( 'aviflosu_cli_threads', Environment::detectRecommendedThreadLimit() );
 		update_option( 'aviflosu_cli_args', $this->get_suggested_cli_args() );
 		update_option( 'aviflosu_cli_env', $this->get_suggested_cli_env() );
 		update_option( 'aviflosu_thumbhash_enabled', false );
