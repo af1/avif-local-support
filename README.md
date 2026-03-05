@@ -6,10 +6,10 @@ A practical fork of AVIF Local Support focused on real-world UX, logging clarity
 
 **AVIF Local Support Extended** is a fork of the original **AVIF Local Support** plugin by **David Degner (ddegner)**.
 
-### Original project
+Original project
 - https://github.com/ddegner/avif-local-support
 
-### Fork project
+Fork project (you are here)
 - https://github.com/af1/avif-local-support
 
 ## Why This Fork Exists
