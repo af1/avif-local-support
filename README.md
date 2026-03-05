@@ -1,16 +1,14 @@
 # AVIF Local Support Extended
 
-A practical fork of AVIF Local Support focused on real-world UX, logging clarity, and compatibility improvements.
+A practical fork of AVIF Local Support focused on server-safe conversion controls, broader AVIF coverage (including lightboxes and non-library JPEGs), clearer progress/logging, and production-ready defaults.
 
 ## Description
 
 **AVIF Local Support Extended** is a fork of the original **AVIF Local Support** plugin by **David Degner (ddegner)**.
 
-Original project
-- https://github.com/ddegner/avif-local-support
+Original project: https://github.com/ddegner/avif-local-support
 
-Fork project (you are here)
-- https://github.com/af1/avif-local-support
+Fork project (you are here): https://github.com/af1/avif-local-support
 
 ## Why This Fork Exists
 
