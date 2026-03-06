@@ -15,6 +15,8 @@ namespace Ddegner\AvifLocalSupport;
  */
 final class BackgroundImages
 {
+	private const MAX_STYLESHEET_BYTES = 1048576;
+	private const MAX_HTML_BUFFER_BYTES = 2097152;
 
 	/**
 	 * Upload directory information.
@@ -45,6 +47,58 @@ final class BackgroundImages
 	 * @var array<string, array{jpeg:string,avif:string}>
 	 */
 	private array $selectorOverrides = array();
+
+	private function getUploadBaseRealPath(): ?string {
+		$uploadsDir = (string) ( $this->uploadsInfo['basedir'] ?? '' );
+		if ( '' === $uploadsDir ) {
+			return null;
+		}
+		$real = @realpath( $uploadsDir );
+		if ( false === $real ) {
+			return null;
+		}
+		return rtrim( str_replace( '\\', '/', $real ), '/' ) . '/';
+	}
+
+	private function resolveUploadsPath(string $relativePath): ?string {
+		$uploadsDir = (string) ( $this->uploadsInfo['basedir'] ?? '' );
+		$uploadsReal = $this->getUploadBaseRealPath();
+		if ( '' === $uploadsDir || null === $uploadsReal ) {
+			return null;
+		}
+
+		$relativePath = (string) trim( str_replace( '\\', '/', $relativePath ) );
+		if ( '' === $relativePath ) {
+			return null;
+		}
+		$relativePath = (string) preg_replace( '/[?#].*$/', '', $relativePath );
+		if ( '' === $relativePath ) {
+			return null;
+		}
+		if ( '/' === $relativePath[0] ) {
+			$relativePath = ltrim( $relativePath, '/' );
+		}
+
+		$path = rtrim( str_replace( '\\', '/', $uploadsDir ), '/' ) . '/' . $relativePath;
+		$dir = dirname( $path );
+		if ( is_link( $dir ) ) {
+			return null;
+		}
+		$realDir = @realpath( $dir );
+		if ( false === $realDir ) {
+			return null;
+		}
+		$realDir = str_replace( '\\', '/', $realDir );
+		if ( is_link( $realDir ) || ! str_starts_with( $realDir, $uploadsReal ) ) {
+			return null;
+		}
+
+		$fullPath = $realDir . '/' . basename( $path );
+		if ( file_exists( $fullPath ) && is_link( $fullPath ) ) {
+			return null;
+		}
+		return $fullPath;
+	}
 
 	/**
 	 * Check if background image AVIF replacement is enabled.
@@ -89,6 +143,10 @@ final class BackgroundImages
 	public function processBuffer(string $buffer): string
 	{
 		if ('' === $buffer || !$this->bufferingStarted) {
+			return $buffer;
+		}
+
+		if (strlen($buffer) > self::MAX_HTML_BUFFER_BYTES) {
 			return $buffer;
 		}
 
@@ -192,9 +250,18 @@ final class BackgroundImages
 				continue;
 			}
 
+			if (!@is_readable($cssPath)) {
+				continue;
+			}
+
+			$cssSize = @filesize($cssPath);
+			if (false === $cssSize || $cssSize <= 0 || $cssSize > self::MAX_STYLESHEET_BYTES) {
+				continue;
+			}
+
 			// Read and process the CSS file
-			$cssContent = file_get_contents($cssPath);
-			if (false !== $cssContent && '' !== $cssContent) {
+			$cssContent = @file_get_contents($cssPath);
+			if (is_string($cssContent) && '' !== $cssContent) {
 				$this->processCssContent($cssContent);
 			}
 		}
@@ -215,16 +282,16 @@ final class BackgroundImages
 			return null;
 		}
 
-		// Strip query string from URL
-		$url = strtok($url, '?');
-		if (false === $url || '' === $url) {
+		// Strip query string and fragment from URL
+		$url = (string) preg_replace('/[?#].*$/', '', $url);
+		if ('' === $url) {
 			return null;
 		}
 
 		// Handle absolute URLs
 		if (str_starts_with($url, $uploadsUrl)) {
 			$relativePath = substr($url, strlen($uploadsUrl));
-			return $uploadsDir . $relativePath;
+			return $this->resolveUploadsPath( ltrim( $relativePath, '/' ) );
 		}
 
 		// Handle relative URLs - try to find /wp-content/uploads/ segment
@@ -232,7 +299,7 @@ final class BackgroundImages
 		$pos = strpos($url, $uploadPathSegment);
 		if (false !== $pos) {
 			$relativePath = substr($url, $pos + strlen($uploadPathSegment));
-			return $uploadsDir . '/' . ltrim($relativePath, '/');
+			return $this->resolveUploadsPath( ltrim( $relativePath, '/' ) );
 		}
 
 		return null;
@@ -355,9 +422,7 @@ final class BackgroundImages
 		// Build local path to check existence
 		$localPath = $this->urlToLocalPath($avifUrl);
 		if (null === $localPath) {
-			// Try alternative path resolution
-			$relativePath = str_replace($uploadsUrl, '', $avifUrl);
-			$localPath = $uploadsDir . $relativePath;
+			return null;
 		}
 
 		// Check if AVIF file exists

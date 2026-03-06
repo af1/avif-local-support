@@ -12,6 +12,43 @@ defined('ABSPATH') || exit;
  */
 final class Diagnostics
 {
+	private const MAX_MISSING_QUERY_ATTACHMENTS = 1200;
+	private const MAX_MISSING_SCAN_FILES = 3000;
+
+	private function normalizeUploadPath( string $path ): ?string {
+		$uploadDir = wp_upload_dir();
+		$baseDir   = (string) ( $uploadDir['basedir'] ?? '' );
+		if ( '' === $baseDir || '' === trim( $path ) ) {
+			return null;
+		}
+
+		$realBase = @realpath( $baseDir );
+		if ( false === $realBase ) {
+			return null;
+		}
+		$path = str_replace( "\0", '', $path );
+		if ( ! file_exists( $path ) || ! is_file( $path ) ) {
+			return null;
+		}
+		$realPath = @realpath( $path );
+		if ( false === $realPath ) {
+			return null;
+		}
+		if ( is_link( $realPath ) ) {
+			return null;
+		}
+
+		$normalizedPath = str_replace( '\\', '/', $realPath );
+		$normalizedBase = rtrim( str_replace( '\\', '/', $realBase ), '/' ) . '/';
+		if ( ! str_starts_with( $normalizedPath, $normalizedBase ) ) {
+			return null;
+		}
+		if ( is_link( dirname( $realPath ) ) ) {
+			return null;
+		}
+
+		return $realPath;
+	}
 
 	/**
 	 * Get comprehensive system status for AVIF support.
@@ -101,7 +138,7 @@ final class Diagnostics
 			array(
 				'post_type' => 'attachment',
 				'post_status' => 'inherit',
-				'posts_per_page' => -1,
+				'posts_per_page' => self::MAX_MISSING_QUERY_ATTACHMENTS,
 				'fields' => 'ids',
 				'no_found_rows' => true,
 				// Prime attachment meta in one query to avoid N+1 calls in get_attached_file/wp_get_attachment_metadata.
@@ -115,12 +152,15 @@ final class Diagnostics
 		foreach ($query->posts as $attachmentId) {
 			// Original
 			$file = get_attached_file($attachmentId);
-			if ($file && preg_match('/\.(jpe?g)$/i', $file) && file_exists($file)) {
-				$real = (string) (@realpath($file) ?: $file);
-				if (!isset($seenJpegs[$real])) {
-					$seenJpegs[$real] = true;
-					++$total;
-					$avif = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $real);
+			$safeFile = (string) ( $this->normalizeUploadPath( (string) ( $file ?? '' ) ) ?? '' );
+			if ( '' !== $safeFile && preg_match('/\.(jpe?g)$/i', $safeFile) ) {
+					if (!isset($seenJpegs[$safeFile])) {
+						$seenJpegs[$safeFile] = true;
+						if ( $total >= self::MAX_MISSING_SCAN_FILES ) {
+							break;
+						}
+						++$total;
+					$avif = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $safeFile);
 					if ($avif && file_exists($avif) && filesize($avif) > 0) {
 						++$existing;
 					} else {
@@ -142,17 +182,20 @@ final class Diagnostics
 						if (empty($size['file'])) {
 							continue;
 						}
-						$p = $baseDir . \trailingslashit($dir) . $size['file'];
-						if (!preg_match('/\.(jpe?g)$/i', $p) || !file_exists($p)) {
+						$p = $baseDir . \trailingslashit($dir) . ltrim((string) $size['file'], '/\\');
+						$pSafe = (string) ( $this->normalizeUploadPath( $p ) ?? '' );
+						if ( '' === $pSafe || !preg_match('/\.(jpe?g)$/i', $pSafe) ) {
 							continue;
 						}
-						$realP = (string) (@realpath($p) ?: $p);
-						if (isset($seenJpegs[$realP])) {
+						if (isset($seenJpegs[$pSafe])) {
 							continue;
 						}
-						$seenJpegs[$realP] = true;
+						$seenJpegs[$pSafe] = true;
+						if ( $total >= self::MAX_MISSING_SCAN_FILES ) {
+							break 2;
+						}
 						++$total;
-						$avif = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $realP);
+						$avif = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $pSafe);
 						if ($avif && file_exists($avif) && filesize($avif) > 0) {
 							++$existing;
 						} else {
@@ -161,6 +204,14 @@ final class Diagnostics
 					}
 				}
 			}
+		}
+
+		if ( $total >= self::MAX_MISSING_SCAN_FILES ) {
+			return array(
+				'total_jpegs' => $total,
+				'existing_avifs' => $existing,
+				'missing_avifs' => $missing,
+			);
 		}
 
 		// Also scan uploads recursively for JPEGs that are not represented in attachment metadata.
@@ -183,17 +234,23 @@ final class Diagnostics
 					if (!($entry instanceof \SplFileInfo) || !$entry->isFile()) {
 						continue;
 					}
+					if ( $entry->isLink() ) {
+						continue;
+					}
 					$p = (string) $entry->getPathname();
-					if (!preg_match('/\.(jpe?g)$/i', $p) || !file_exists($p)) {
+					$safeP = (string) ( $this->normalizeUploadPath( $p ) ?? '' );
+					if ( '' === $safeP || !preg_match('/\.(jpe?g)$/i', $safeP) ) {
 						continue;
 					}
-					$realP = (string) (@realpath($p) ?: $p);
-					if (isset($seenJpegs[$realP])) {
+					if ( isset($seenJpegs[$safeP]) || $total >= self::MAX_MISSING_SCAN_FILES ) {
 						continue;
 					}
-					$seenJpegs[$realP] = true;
+					$seenJpegs[$safeP] = true;
 					++$total;
-					$avif = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $realP);
+					if ( $total >= self::MAX_MISSING_SCAN_FILES ) {
+						break;
+					}
+					$avif = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $safeP);
 					if ($avif && file_exists($avif) && filesize($avif) > 0) {
 						++$existing;
 					} else {
@@ -228,24 +285,24 @@ final class Diagnostics
 		$truncated = false;
 
 		$considerPath = function (string $path) use (&$seenJpegs, &$files, &$truncated, $limit, $baseDir, $baseUrl): bool {
-			if (!preg_match('/\.(jpe?g)$/i', $path) || !file_exists($path)) {
+			$safePath = (string) ( $this->normalizeUploadPath( (string) $path ) ?? '' );
+			if ( '' === $safePath || !preg_match('/\.(jpe?g)$/i', $safePath)) {
 				return false;
 			}
-			$realPath = (string) (@realpath($path) ?: $path);
-			if (isset($seenJpegs[$realPath])) {
+			if (isset($seenJpegs[$safePath])) {
 				return false;
 			}
-			$seenJpegs[$realPath] = true;
+			$seenJpegs[$safePath] = true;
 
-			$avifPath = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $realPath);
+			$avifPath = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $safePath);
 			$hasAvif = $avifPath && file_exists($avifPath) && filesize($avifPath) > 0;
 			if ($hasAvif) {
 				return false;
 			}
 
 			$files[] = array(
-				'jpeg_path' => $realPath,
-				'jpeg_url' => $this->pathToUploadsUrl($realPath, $baseDir, $baseUrl),
+				'jpeg_path' => $safePath,
+				'jpeg_url' => $this->pathToUploadsUrl($safePath, $baseDir, $baseUrl),
 				'avif_path' => $avifPath,
 				'avif_url' => $this->pathToUploadsUrl($avifPath, $baseDir, $baseUrl),
 			);
@@ -262,7 +319,7 @@ final class Diagnostics
 			array(
 				'post_type' => 'attachment',
 				'post_status' => 'inherit',
-				'posts_per_page' => -1,
+				'posts_per_page' => max( 1, min( self::MAX_MISSING_QUERY_ATTACHMENTS, $limit * 4 ) ),
 				'fields' => 'ids',
 				'no_found_rows' => true,
 				'update_post_meta_cache' => true,
@@ -290,13 +347,13 @@ final class Diagnostics
 			}
 			if (!empty($meta['sizes']) && is_array($meta['sizes'])) {
 				foreach ($meta['sizes'] as $size) {
-					if (empty($size['file'])) {
-						continue;
-					}
-					$p = $baseDir . \trailingslashit($dir) . $size['file'];
-					if ($considerPath((string) $p)) {
-						break 2;
-					}
+						if (empty($size['file'])) {
+							continue;
+						}
+						$p = $baseDir . \trailingslashit($dir) . ltrim( (string) $size['file'], '/\\' );
+						if ($considerPath((string) $p)) {
+							break 2;
+						}
 				}
 			}
 		}

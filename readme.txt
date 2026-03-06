@@ -3,7 +3,7 @@ Contributors: ddegner, af1
 Tags: avif, images, performance, media, optimization
 Requires at least: 6.8
 Tested up to: 6.9
-Stable tag: 0.6.5-extended.1
+Stable tag: 0.6.5-extended.8
 Requires PHP: 8.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -88,6 +88,30 @@ License details:
 = 0.6.4-extended.3 =
 - Updated logs header quality display to show final retry quality used for AVIF output.
 
-= 0.6.5-extended.1 =
+= 0.6.5-extended.8 =
+- Simplified About tab to only show original plugin credit and links.
+- Added explicit GitHub link to this fork.
+
+= 0.6.5-extended.7 =
+- Fixed fatal `ValueError` in CLI args sanitization (`str_getcsv` enclosure argument).
+- Prevents crash when saving plugin settings on PHP 8.3+.
+
+= 0.6.5-extended.6 =
+- Full-file syntax verification pass across all PHP and JS source files before packaging.
+- No new runtime parse/control-flow issues found beyond prior .4/.5 fixes.
+
+= 0.6.5-extended.5 =
+- Fixed fatal `Cannot break 2 levels` in Diagnostics missing-count scan flow.
+- Added early return at scan limit to avoid unnecessary additional traversal.
+
+= 0.6.5-extended.4 =
+- Fixed a PHP parse error in `class-converter.php` that could trigger a critical error on activation.
+- Corrected malformed brace structure in conversion scan methods.
+
+= 0.6.5-extended.3 =
+- Security hardening pass across REST, file path handling, and admin UI rendering.
+- Added additional bounds/sanitization guards and defense-in-depth log HTML sanitization.
+
+= 0.6.5-extended.2 =
 - Added Conversion Insights panel under Logs with live run, queue, health, and size metrics.
 - Updated progress to show overall AVIF completion and throughput based on created AVIF files.

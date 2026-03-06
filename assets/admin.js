@@ -95,6 +95,24 @@
       else element.classList.remove('hidden');
     }
 
+    function setTextWithSpinner(element, text) {
+      if (!element) return;
+      element.textContent = '';
+      var spinnerEl = document.createElement('span');
+      spinnerEl.className = 'spinner is-active avif-spinner-inline';
+      element.appendChild(spinnerEl);
+      element.appendChild(document.createTextNode(' ' + String(text || '')));
+    }
+
+    function setParagraphMessage(container, text, className) {
+      if (!container) return;
+      container.textContent = '';
+      var p = document.createElement('p');
+      p.className = className || 'description';
+      p.textContent = String(text || '');
+      container.appendChild(p);
+    }
+
     // Convert-now button (AJAX queue + simple counter progress)
     var convertBtn = document.querySelector('#avif-local-support-convert-now');
     var stopBtn = document.querySelector('#avif-local-support-stop-convert');
@@ -125,8 +143,6 @@
     var missingFilesWrap = document.querySelector('#avif-local-support-missing-files-wrap');
     var missingFilesList = document.querySelector('#avif-local-support-missing-files-list');
     var missingFilesRefreshBtn = document.querySelector('#avif-local-support-refresh-missing-files');
-    var applyRecommendedDefaultsBtn = document.querySelector('#avif-local-support-apply-recommended-defaults');
-    var applyRecommendedDefaultsStatus = document.querySelector('#avif-local-support-recommended-defaults-status');
     var qualityInput = document.querySelector('#aviflosu_quality');
     var speedInput = document.querySelector('#aviflosu_speed');
     var pollingTimerLocal = null;
@@ -287,17 +303,6 @@
       });
     }
 
-    function updateRecommendedDefaultsButtonState() {
-      if (!applyRecommendedDefaultsBtn) return;
-      if (!qualityInput || !speedInput) {
-        applyRecommendedDefaultsBtn.disabled = true;
-        return;
-      }
-      var qualityVal = Number(qualityInput.value || 0);
-      var speedVal = Number(speedInput.value || 0);
-      applyRecommendedDefaultsBtn.disabled = (qualityVal === 83 && speedVal === 0);
-    }
-
     function stopPolling() {
       if (pollingTimerLocal) {
         window.clearInterval(pollingTimerLocal);
@@ -394,7 +399,7 @@
       var missingEl = document.querySelector('#avif-local-support-missing-avifs');
       if (statsLoadingEl) {
         statsLoadingEl.classList.remove('hidden');
-        statsLoadingEl.innerHTML = '<span class="spinner is-active avif-spinner-inline"></span> ' + getI18n('avifStatsLoading', 'Loading AVIF stats...');
+        setTextWithSpinner(statsLoadingEl, getI18n('avifStatsLoading', 'Loading AVIF stats...'));
       }
       apiFetch({ path: '/aviflosu/v1/scan-missing', method: 'POST' })
         .then(function (data) {
@@ -424,7 +429,7 @@
       toggleHidden(missingFilesPanel, false);
       toggleHidden(missingFilesWrap, true);
       if (missingFilesRefreshBtn) missingFilesRefreshBtn.disabled = true;
-      missingFilesStatus.innerHTML = '<span class="spinner is-active avif-spinner-inline"></span> ' + getI18n('missingFilesLoading', 'Loading files without AVIF...');
+      setTextWithSpinner(missingFilesStatus, getI18n('missingFilesLoading', 'Loading files without AVIF...'));
 
       apiFetch({ path: '/aviflosu/v1/missing-files?limit=200', method: 'GET' })
         .then(function (data) {
@@ -508,42 +513,6 @@
         if (evt.key === 'Escape') {
           missingFilesModal.classList.add('hidden');
         }
-      });
-    }
-
-    if (applyRecommendedDefaultsBtn && typeof AVIFLocalSupportData !== 'undefined') {
-      updateRecommendedDefaultsButtonState();
-      if (qualityInput) {
-        qualityInput.addEventListener('input', updateRecommendedDefaultsButtonState);
-        qualityInput.addEventListener('change', updateRecommendedDefaultsButtonState);
-      }
-      if (speedInput) {
-        speedInput.addEventListener('input', updateRecommendedDefaultsButtonState);
-        speedInput.addEventListener('change', updateRecommendedDefaultsButtonState);
-      }
-      applyRecommendedDefaultsBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        applyRecommendedDefaultsBtn.disabled = true;
-        apiFetch({ path: '/aviflosu/v1/apply-recommended-defaults', method: 'POST' })
-          .then(function (json) {
-            if (qualityInput && typeof json.quality !== 'undefined') {
-              qualityInput.value = String(json.quality);
-              if (qualityInput.nextElementSibling) qualityInput.nextElementSibling.innerText = String(json.quality);
-            }
-            if (speedInput && typeof json.speed !== 'undefined') {
-              speedInput.value = String(json.speed);
-              if (speedInput.nextElementSibling) speedInput.nextElementSibling.innerText = String(json.speed);
-            }
-            if (applyRecommendedDefaultsStatus) {
-              applyRecommendedDefaultsStatus.textContent = getI18n('recommendDefaultsApplied', 'Recommended AVIF defaults applied (Quality 83, Speed 0).');
-            } else if (statusEl) {
-              statusEl.textContent = getI18n('recommendDefaultsApplied', 'Recommended AVIF defaults applied (Quality 83, Speed 0).');
-            }
-            updateRecommendedDefaultsButtonState();
-          })
-          .finally(function () {
-            updateRecommendedDefaultsButtonState();
-          });
       });
     }
 
@@ -1193,7 +1162,7 @@
           if (json && typeof json.content === 'string' && json.content !== '') {
             logsContent.innerHTML = json.content;
           } else {
-            logsContent.innerHTML = '<p class="description">' + getI18n('logsNone', 'No logs available.') + '</p>';
+            setParagraphMessage(logsContent, getI18n('logsNone', 'No logs available.'), 'description');
           }
           applyLogsFilter();
         })
@@ -1221,7 +1190,7 @@
         refreshLogsContent()
           .catch(function () {
             if (logsContent) {
-              logsContent.innerHTML = '<p class="description avif-error-text">' + getI18n('logsRefreshFailed', 'Could not refresh logs. Please try again.') + '</p>';
+              setParagraphMessage(logsContent, getI18n('logsRefreshFailed', 'Could not refresh logs. Please try again.'), 'description avif-error-text');
             }
           })
           .finally(function () {
@@ -1243,13 +1212,13 @@
           .then(function () {
             return refreshLogsContent().catch(function () {
               if (logsContent) {
-                logsContent.innerHTML = '<p class="description avif-error-text">' + getI18n('logsRefreshFailed', 'Could not refresh logs. Please try again.') + '</p>';
+                setParagraphMessage(logsContent, getI18n('logsRefreshFailed', 'Could not refresh logs. Please try again.'), 'description avif-error-text');
               }
             });
           })
           .catch(function () {
             if (logsContent) {
-              logsContent.innerHTML = '<p class="description avif-error-text">' + getI18n('logsClearFailed', 'Could not clear logs. Please try again.') + '</p>';
+              setParagraphMessage(logsContent, getI18n('logsClearFailed', 'Could not clear logs. Please try again.'), 'description avif-error-text');
               applyLogsFilter();
             }
           })

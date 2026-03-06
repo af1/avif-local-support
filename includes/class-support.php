@@ -8,6 +8,7 @@ namespace Ddegner\AvifLocalSupport;
 \defined( 'ABSPATH' ) || exit;
 
 final class Support {
+	private const MAX_INLINE_THUMBHASH_DECODER_BYTES = 524288;
 
 
 
@@ -96,6 +97,10 @@ final class Support {
 	public function inlineThumbHashDecoder(): void {
 		$scriptPath = AVIFLOSU_PLUGIN_DIR . 'assets/thumbhash-decoder.min.js';
 		if ( ! file_exists( $scriptPath ) ) {
+			return;
+		}
+		$scriptSize = @filesize( $scriptPath );
+		if ( false === $scriptSize || $scriptSize <= 0 || $scriptSize > self::MAX_INLINE_THUMBHASH_DECODER_BYTES ) {
 			return;
 		}
 		$script = file_get_contents( $scriptPath );
