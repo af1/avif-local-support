@@ -293,29 +293,49 @@ final class ImageMagickCli {
 	}
 
 	private static function commandV( string $bin, array $env ): string {
-		// Prefer proc_open when available.
-		if ( function_exists( 'proc_open' ) ) {
-			[$code, $output] = self::runShell( 'command -v ' . escapeshellarg( $bin ) . ' 2>/dev/null', $env );
-			if ( 0 === $code ) {
-				$p = trim( $output );
-				if ( '' !== $p && @file_exists( $p ) && @is_executable( $p ) ) {
-					return $p;
-				}
+		$bin = trim( (string) $bin );
+		if ( '' === $bin ) {
+			return '';
+		}
+
+		if ( str_contains( $bin, '/' ) || str_contains( $bin, '\\' ) ) {
+			if ( @file_exists( $bin ) && @is_executable( $bin ) ) {
+				return $bin;
 			}
 			return '';
 		}
 
-		// Fallback to shell_exec if allowed.
-		$disabled = array_map( 'trim', explode( ',', (string) ini_get( 'disable_functions' ) ) );
-		if ( in_array( 'shell_exec', $disabled, true ) ) {
+		$path = (string) ( $env['PATH'] ?? getenv( 'PATH' ) ?: self::commandVPathFallback() );
+		if ( '' === $path ) {
 			return '';
 		}
-		$res = @shell_exec( 'command -v ' . escapeshellarg( $bin ) . ' 2>/dev/null' );
-		$p   = is_string( $res ) ? trim( $res ) : '';
-		if ( '' !== $p && @file_exists( $p ) && @is_executable( $p ) ) {
-			return $p;
+
+		$pathDelimiter = ( 'Windows' === PHP_OS_FAMILY ) ? ';' : ':';
+		$paths = explode( $pathDelimiter, $path );
+		foreach ( $paths as $dir ) {
+			$dir = trim( (string) $dir );
+			if ( '' === $dir ) {
+				continue;
+			}
+			$candidate = rtrim( $dir, DIRECTORY_SEPARATOR ) . DIRECTORY_SEPARATOR . $bin;
+			if ( @file_exists( $candidate ) && @is_executable( $candidate ) ) {
+				return $candidate;
+			}
+			if ( 'Windows' === PHP_OS_FAMILY ) {
+				foreach ( array( '.exe', '.bat', '.cmd', '.com' ) as $ext ) {
+					$candidateWithExt = $candidate . $ext;
+					if ( @file_exists( $candidateWithExt ) && @is_executable( $candidateWithExt ) ) {
+						return $candidateWithExt;
+					}
+				}
+			}
 		}
+
 		return '';
+	}
+
+	private static function commandVPathFallback(): string {
+		return '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin';
 	}
 
 	private static function version( string $path, array $env ): string {
@@ -349,11 +369,10 @@ final class ImageMagickCli {
 	 * @return array{0:int,1:string}
 	 */
 	private static function run( string $bin, array $args, array $env ): array {
-		$cmdParts = array( escapeshellarg( $bin ) );
+		$cmdParts = array( $bin );
 		foreach ( $args as $a ) {
-			$cmdParts[] = escapeshellarg( (string) $a );
+			$cmdParts[] = (string) $a;
 		}
-		$command = implode( ' ', $cmdParts ) . ' 2>&1';
 
 		if ( function_exists( 'proc_open' ) ) {
 			$descriptor = array(
@@ -362,7 +381,7 @@ final class ImageMagickCli {
 				2 => array( 'pipe', 'w' ),
 			);
 			// phpcs:ignore Generic.PHP.ForbiddenFunctions.Found -- Required for non-shell command execution.
-			$process = @proc_open( $command, $descriptor, $pipes, null, $env );
+			$process = @proc_open( $cmdParts, $descriptor, $pipes, null, $env );
 			if ( ! is_resource( $process ) ) {
 				return array( 1, '' );
 			}
@@ -385,21 +404,14 @@ final class ImageMagickCli {
 		}
 		$out  = array();
 		$code = 0;
+		$escapedParts = array();
+		foreach ( $cmdParts as $part ) {
+			$escapedParts[] = escapeshellarg( (string) $part );
+		}
+		$command = implode( ' ', $escapedParts ) . ' 2>&1';
 		@exec( $command, $out, $code );
 		$output = trim( implode( "\n", array_map( 'strval', $out ) ) );
 		return array( (int) $code, $output );
 	}
 
-	/**
-	 * Run a shell snippet under /bin/sh -lc.
-	 *
-	 * @return array{0:int,1:string}
-	 */
-	private static function runShell( string $shellCommand, array $env ): array {
-		$sh = '/bin/sh';
-		if ( ! @file_exists( $sh ) || ! @is_executable( $sh ) ) {
-			return array( 1, '' );
-		}
-		return self::run( $sh, array( '-lc', $shellCommand ), $env );
-	}
 }

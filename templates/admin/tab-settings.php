@@ -18,6 +18,10 @@ defined( 'ABSPATH' ) || exit;
 			<?php do_settings_fields( 'avif-local-support', 'aviflosu_conversion_basic' ); ?>
 		</table>
 
+		<p class="description avif-recommended-note">
+			<?php esc_html_e( 'Recommended settings: 83 quality, 0 encoding speed.', 'avif-local-support' ); ?>
+		</p>
+
 		<details class="avif-support-details">
 			<summary><?php esc_html_e( 'Advanced Settings', 'avif-local-support' ); ?></summary>
 			<div class="avif-support-details-body">
@@ -29,8 +33,6 @@ defined( 'ABSPATH' ) || exit;
 		</details>
 
 		<div class="avif-actions-row">
-			<button type="button" class="button" id="avif-local-support-apply-recommended-defaults"><?php esc_html_e( 'Apply Recommended Defaults (83/0)', 'avif-local-support' ); ?></button>
-			<span id="avif-local-support-recommended-defaults-status" class="description"></span>
 			<?php submit_button( __( 'Save AVIF Settings', 'avif-local-support' ), 'primary', 'submit', false ); ?>
 		</div>
 	</form>

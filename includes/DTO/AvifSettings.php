@@ -94,9 +94,11 @@ final class AvifSettings {
 		$convertViaSchedule = (bool) get_option( 'aviflosu_convert_via_schedule', true );
 
 		$cliArgs = (string) get_option( 'aviflosu_cli_args', '' );
+		$cliArgs = Environment::sanitizeCliArgsString( $cliArgs );
 		// Default environment if not set
 		$defaultEnv = Environment::buildDefaultEnvString();
-		$cliEnv     = (string) get_option( 'aviflosu_cli_env', $defaultEnv );
+		$rawEnv     = (string) get_option( 'aviflosu_cli_env', $defaultEnv );
+		$cliEnv     = Environment::sanitizeCliEnvString( $rawEnv );
 		$cliThreads = max( 1, min( 256, (int) get_option( 'aviflosu_cli_threads', Environment::detectRecommendedThreadLimit() ) ) );
 		$keepLargerAvif       = (bool) get_option( 'aviflosu_keep_larger_avif', true );
 		$largerRetryCount     = max( 0, min( 10, (int) get_option( 'aviflosu_larger_retry_count', 3 ) ) );
