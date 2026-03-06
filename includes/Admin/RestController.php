@@ -23,6 +23,8 @@ final class RestController
 
 
 	private const NAMESPACE = 'aviflosu/v1';
+	private const MAX_MISSING_FILES_LIMIT = 1000;
+	private const MAX_MAGICK_TEST_OUTPUT_BYTES = 65536;
 
 	private Converter $converter;
 	private Logger $logger;
@@ -260,9 +262,29 @@ final class RestController
 		);
 	}
 
-	public function permissionManageOptions(): bool
+	public function permissionManageOptions( ?\WP_REST_Request $request = null ): bool
 	{
-		return current_user_can('manage_options');
+		// Admin-only endpoint for all actions.
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return false;
+		}
+
+		// Require a REST nonce for non-read actions to mitigate CSRF.
+		if ( null === $request ) {
+			return false;
+		}
+
+		$method = strtoupper( (string) $request->get_method() );
+		if ( in_array( $method, array( 'GET', 'HEAD' ), true ) ) {
+			return true;
+		}
+
+		$nonce = (string) $request->get_header( 'X-WP-Nonce' );
+		if ( '' === $nonce ) {
+			$nonce = (string) $request->get_param( '_wpnonce' );
+		}
+
+		return '' !== $nonce && (bool) wp_verify_nonce( $nonce, 'wp_rest' );
 	}
 
 	public function scanMissing(\WP_REST_Request $request): \WP_REST_Response
@@ -273,10 +295,90 @@ final class RestController
 	public function missingFiles(\WP_REST_Request $request): \WP_REST_Response
 	{
 		$limit = (int) $request->get_param('limit');
-		if ($limit <= 0) {
-			$limit = 200;
-		}
+		$limit = max(1, min(self::MAX_MISSING_FILES_LIMIT, $limit > 0 ? $limit : 200));
 		return rest_ensure_response($this->diagnostics->getMissingFiles($limit));
+	}
+
+	private function normalizeUploadsPath(string $path, bool $mustExist = true): ?string
+	{
+		$path = str_replace("\0", '', trim($path));
+		if ('' === $path) {
+			return null;
+		}
+
+		$uploadDir = wp_upload_dir();
+		$baseDir = (string) ($uploadDir['basedir'] ?? '');
+		if ('' === $baseDir) {
+			return null;
+		}
+
+		$realBase = @realpath($baseDir);
+		if (false === $realBase) {
+			return null;
+		}
+
+		if ($mustExist) {
+			if (!file_exists($path) || !is_file($path)) {
+				return null;
+			}
+
+			$realPath = @realpath($path);
+			if (false === $realPath) {
+				return null;
+			}
+
+			if (is_link($realPath) || is_link(dirname($realPath))) {
+				return null;
+			}
+
+			$normalizedPath = str_replace('\\', '/', $realPath);
+			$normalizedBase = rtrim(str_replace('\\', '/', $realBase), '/') . '/';
+			if (!str_starts_with($normalizedPath, $normalizedBase)) {
+				return null;
+			}
+
+			return $realPath;
+		}
+
+		$dir = dirname($path);
+		if ('' === $dir || '.' === $dir) {
+			return null;
+		}
+
+		$realDir = @realpath($dir);
+		if (false === $realDir || is_link($realDir)) {
+			return null;
+		}
+
+		$normalizedBase = rtrim(str_replace('\\', '/', $realBase), '/') . '/';
+		$normalizedPath = rtrim(str_replace('\\', '/', $realDir), '/') . '/' . basename($path);
+		if (!str_starts_with($normalizedPath, $normalizedBase)) {
+			return null;
+		}
+
+		if (file_exists($path) && is_link($path)) {
+			return null;
+		}
+
+		return $normalizedPath;
+	}
+
+	private function normalizeCliBinaryPath(string $path): string
+	{
+		$path = trim(str_replace(array("\0", "\r", "\n", "\t"), '', $path));
+		if ('' === $path) {
+			return '';
+		}
+		if (function_exists('wp_normalize_path')) {
+			$path = wp_normalize_path($path);
+		}
+		if (str_contains($path, '..')) {
+			return '';
+		}
+
+		$isUnixAbs = str_starts_with($path, '/');
+		$isWindowsAbs = preg_match('/^[A-Za-z]:[\/\\\\]/', $path) === 1;
+		return ($isUnixAbs || $isWindowsAbs) ? $path : '';
 	}
 
 	public function convertNow(\WP_REST_Request $request): \WP_REST_Response
@@ -395,7 +497,37 @@ final class RestController
 		ob_start();
 		$this->logger->renderLogsContent();
 		$content = ob_get_clean();
+		$content = is_string($content) ? $this->sanitizeLogsHtml($content) : '';
 		return rest_ensure_response(array('content' => $content));
+	}
+
+	private function sanitizeLogsHtml(string $html): string
+	{
+		$allowed = array(
+			'div' => array(
+				'class' => true,
+				'data-status' => true,
+				'data-filename' => true,
+				'data-search' => true,
+			),
+			'span' => array(
+				'class' => true,
+			),
+			'strong' => array(),
+			'a' => array(
+				'href' => true,
+				'target' => true,
+				'rel' => true,
+			),
+			'p' => array(
+				'class' => true,
+			),
+			'code' => array(
+				'class' => true,
+			),
+		);
+
+		return (string) wp_kses($html, $allowed);
 	}
 
 	public function clearLogs(\WP_REST_Request $request): \WP_REST_Response
@@ -406,40 +538,78 @@ final class RestController
 
 	public function runMagickTest(\WP_REST_Request $request): \WP_REST_Response
 	{
-		$path = (string) get_option('aviflosu_cli_path', '');
+		$path = $this->normalizeCliBinaryPath((string) get_option('aviflosu_cli_path', ''));
 		$detected = $this->diagnostics->detectCliBinaries();
 
 		if ('' === $path && !empty($detected)) {
-			$path = (string) ($detected[0]['path'] ?? '');
+			$path = $this->normalizeCliBinaryPath((string) ($detected[0]['path'] ?? ''));
 		}
 
 		$autoSelected = false;
 		if ('' === $path) {
 			$auto = ImageMagickCli::getAutoDetectedPath(null);
 			if ('' !== $auto) {
-				$path = $auto;
+				$path = $this->normalizeCliBinaryPath($auto);
 				$autoSelected = true;
 			}
-		}
-
-		$disableFunctions = array_map('trim', explode(',', (string) ini_get('disable_functions')));
-		$execAvailable = !in_array('exec', $disableFunctions, true);
-
-		if (!$execAvailable) {
-			return new \WP_REST_Response(array('message' => 'exec disabled by PHP disable_functions.'), 400);
 		}
 
 		if ('' === $path || !@file_exists($path)) {
 			return new \WP_REST_Response(array('message' => 'No ImageMagick CLI path found. Set a custom path under Engine Selection.'), 400);
 		}
 
+		if (!@is_executable($path)) {
+			return new \WP_REST_Response(array('message' => 'Configured CLI path is not executable.'), 400);
+		}
+
 		$strategy = ImageMagickCli::getDefineStrategy($path, null);
 
-		$cmd = escapeshellarg($path) . ' -version 2>&1';
 		$outLines = array();
-		$exitCode = 0;
-		@exec($cmd, $outLines, $exitCode);
+		$exitCode = 127;
+
+		if (function_exists('proc_open')) {
+			$descriptor = array(
+				0 => array('pipe', 'r'),
+				1 => array('pipe', 'w'),
+				2 => array('pipe', 'w'),
+			);
+
+			$process = @proc_open(
+				array($path, '-version'),
+				$descriptor,
+				$pipes,
+				null,
+				null,
+				array('bypass_shell' => true)
+			);
+			if (is_resource($process)) {
+				@fclose($pipes[0]); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- proc_open pipe.
+				$out  = (string) stream_get_contents($pipes[1]);
+				$err  = (string) stream_get_contents($pipes[2]);
+				@fclose($pipes[1]);
+				@fclose($pipes[2]);
+				$exitCode = (int) proc_close($process);
+				$combined = substr($out . "\n" . $err, 0, self::MAX_MAGICK_TEST_OUTPUT_BYTES);
+				$outLines = array_merge($outLines, preg_split("/\r\n|\r|\n/", trim((string) $combined), -1, PREG_SPLIT_NO_EMPTY));
+			}
+		}
+
+		if (empty($outLines) && $exitCode === 127) {
+			$disableFunctions = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+			$execAvailable = !in_array('exec', $disableFunctions, true);
+
+			if (!$execAvailable) {
+				return new \WP_REST_Response(array('message' => 'proc_open unavailable and exec is disabled by PHP disable_functions.'), 400);
+			}
+
+			$cmd = escapeshellarg($path) . ' -version 2>&1';
+			@exec($cmd, $outLines, $exitCode);
+		}
+
 		$output = trim(implode("\n", array_map('strval', $outLines)));
+		if (strlen($output) > self::MAX_MAGICK_TEST_OUTPUT_BYTES) {
+			$output = substr($output, 0, self::MAX_MAGICK_TEST_OUTPUT_BYTES);
+		}
 
 		if ('' === $output) {
 			return rest_ensure_response(
@@ -480,6 +650,10 @@ final class RestController
 
 		if (empty($rawFile) || empty($rawFile['tmp_name'])) {
 			return new \WP_REST_Response(array('message' => __('No file uploaded.', 'avif-local-support')), 400);
+		}
+		$uploadError = isset($rawFile['error']) ? (int) $rawFile['error'] : UPLOAD_ERR_NO_FILE;
+		if (UPLOAD_ERR_OK !== $uploadError || !is_uploaded_file((string) $rawFile['tmp_name'])) {
+			return new \WP_REST_Response(array('message' => __('Uploaded file is invalid.', 'avif-local-support')), 400);
 		}
 
 		$fileType = wp_check_filetype_and_ext(
@@ -549,6 +723,9 @@ final class RestController
 		if ($attachmentId <= 0) {
 			return new \WP_REST_Response(array('message' => 'Invalid attachment ID.'), 400);
 		}
+		if ($targetIndex < 0) {
+			return new \WP_REST_Response(array('message' => 'Invalid target index.'), 400);
+		}
 
 		// Get current sizes.
 		$data = $this->converter->getAttachmentSizes($attachmentId);
@@ -576,8 +753,10 @@ final class RestController
 				// Already converted, skip.
 			} else {
 				$jpegPath = $size['jpeg_path'] ?? '';
-				if ('' !== $jpegPath) {
-					$conversionResult = $this->converter->convertSingleJpegToAvif($jpegPath);
+				$jpegPath = is_string($jpegPath) ? $jpegPath : '';
+				$safeJpegPath = '' !== $jpegPath ? $this->normalizeUploadsPath($jpegPath, true) : null;
+				if (null !== $safeJpegPath) {
+					$conversionResult = $this->converter->convertSingleJpegToAvif($safeJpegPath);
 					$success = $conversionResult->success;
 					$size['converted'] = $success;
 					$size['status'] = $success ? 'success' : 'failure';
@@ -586,8 +765,9 @@ final class RestController
 					}
 					if ($success) {
 						// Refresh AVIF size.
-						$avifPath = $size['avif_path'] ?? '';
-						$size['avif_size'] = file_exists($avifPath) ? (int) filesize($avifPath) : 0;
+						$avifPath = is_string($size['avif_path'] ?? null) ? (string) $size['avif_path'] : '';
+						$safeAvifPath = '' !== $avifPath ? $this->normalizeUploadsPath($avifPath, true) : null;
+						$size['avif_size'] = null !== $safeAvifPath ? (int) filesize($safeAvifPath) : 0;
 					}
 				} else {
 					$size['status'] = 'failure';
@@ -632,6 +812,9 @@ final class RestController
 
 		if (empty($rawFile) || empty($rawFile['tmp_name'])) {
 			return new \WP_REST_Response(array('message' => __('No file uploaded.', 'avif-local-support')), 400);
+		}
+		if (!is_uploaded_file((string) $rawFile['tmp_name'])) {
+			return new \WP_REST_Response(array('message' => __('Uploaded file is invalid.', 'avif-local-support')), 400);
 		}
 
 		$fileType = wp_check_filetype_and_ext(
@@ -789,13 +972,22 @@ final class RestController
 		}
 
 		$jpegPath = (string) ($state['jpeg_path'] ?? '');
-		if ('' === $jpegPath || !file_exists($jpegPath)) {
+		$safeJpegPath = '' !== $jpegPath ? $this->normalizeUploadsPath($jpegPath, true) : null;
+		if (null === $safeJpegPath) {
 			return new \WP_Error('aviflosu_playground_missing', __('Test JPEG is no longer available. Upload a new one.', 'avif-local-support'));
 		}
+		$state['jpeg_path'] = $safeJpegPath;
 
 		if (empty($state['avif_path'])) {
-			$state['avif_path'] = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $jpegPath);
+			$state['avif_path'] = (string) preg_replace('/\.(jpe?g)$/i', '.avif', $safeJpegPath);
 		}
+
+		$avifPath = (string) ($state['avif_path'] ?? '');
+		$safeAvifPath = '' !== $avifPath ? $this->normalizeUploadsPath($avifPath, file_exists($avifPath)) : null;
+		if (null === $safeAvifPath) {
+			return new \WP_Error('aviflosu_playground_missing', __('Test AVIF path is invalid. Upload a new JPEG.', 'avif-local-support'));
+		}
+		$state['avif_path'] = $safeAvifPath;
 
 		return $state;
 	}
@@ -1127,8 +1319,11 @@ final class RestController
 
 	private function buildPlaygroundResponse(string $token, array $state, array $settings, string $error = ''): array
 	{
-		$jpegPath = (string) ($state['jpeg_path'] ?? '');
-		$avifPath = (string) ($state['avif_path'] ?? '');
+		$jpegPathRaw = (string) ($state['jpeg_path'] ?? '');
+		$avifPathRaw = (string) ($state['avif_path'] ?? '');
+
+		$jpegPath = '' !== $jpegPathRaw ? (string) ($this->normalizeUploadsPath($jpegPathRaw, true) ?? '') : '';
+		$avifPath = '' !== $avifPathRaw ? (string) ($this->normalizeUploadsPath($avifPathRaw, true) ?? '') : '';
 
 		// Ensure file size/mtime checks reflect the just-written preview artifacts.
 		if ('' !== $jpegPath) {

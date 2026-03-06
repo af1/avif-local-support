@@ -189,7 +189,7 @@ final class Settings
 			array(
 				'type' => 'string',
 				'default' => '',
-				'sanitize_callback' => 'sanitize_text_field',
+				'sanitize_callback' => array($this, 'sanitizeCliPath'),
 				'show_in_rest' => true,
 			)
 		);
@@ -200,7 +200,7 @@ final class Settings
 			array(
 				'type' => 'string',
 				'default' => '',
-				'sanitize_callback' => 'sanitize_text_field',
+				'sanitize_callback' => array($this, 'sanitizeCliArgs'),
 				'show_in_rest' => true,
 			)
 		);
@@ -359,7 +359,7 @@ final class Settings
 		// Conversion section.
 		add_settings_field(
 			'avif_local_support_convert_on_upload',
-			__('Convert uploads to AVIF', 'avif-local-support'),
+			__('Queue AVIF conversion after upload', 'avif-local-support'),
 			array($this, 'renderConvertOnUploadField'),
 			self::PAGE_SLUG,
 			'aviflosu_conversion_basic',
@@ -559,7 +559,32 @@ final class Settings
 
 	public function sanitizeCliEnv($value): string
 	{
-		return trim(wp_strip_all_tags((string) ($value ?? '')));
+		return Environment::sanitizeCliEnvString( (string) ( $value ?? '' ) );
+	}
+
+	public function sanitizeCliPath($value): string
+	{
+		$path = (string) ($value ?? '');
+		$path = trim(str_replace(array("\0", "\r", "\n", "\t"), '', $path));
+		if ('' === $path) {
+			return '';
+		}
+
+		if (function_exists('wp_normalize_path')) {
+			$path = wp_normalize_path($path);
+		}
+		if (str_contains($path, '..')) {
+			return '';
+		}
+
+		$isUnixAbs = str_starts_with($path, '/');
+		$isWindowsAbs = preg_match('/^[A-Za-z]:[\/\\\\]/', $path) === 1;
+		return ($isUnixAbs || $isWindowsAbs) ? $path : '';
+	}
+
+	public function sanitizeCliArgs($value): string
+	{
+		return Environment::sanitizeCliArgsString( (string) ( $value ?? '' ) );
 	}
 
 	public function sanitizeLogsMaxEntries($value): int
@@ -599,29 +624,27 @@ final class Settings
 	{
 		$value = (bool) get_option('aviflosu_enable_support', true);
 		echo '<label for="aviflosu_enable_support">';
-		echo '<input id="aviflosu_enable_support" type="checkbox" name="aviflosu_enable_support" value="1" ' . checked(true, $value, false) . ' /> ';
-		echo esc_html__('Serve AVIF files before JPEG files on the front end', 'avif-local-support');
+		echo '<input id="aviflosu_enable_support" type="checkbox" name="aviflosu_enable_support" value="1" ' . checked(true, $value, false) . ' />';
 		echo '</label>';
+		echo '<p class="description">' . esc_html__('Serve AVIF files before JPEG files on the front end.', 'avif-local-support') . '</p>';
 	}
 
 	public function renderEnableBackgroundImagesField(): void
 	{
 		$value = (bool) get_option('aviflosu_enable_background_images', true);
 		echo '<label for="aviflosu_enable_background_images">';
-		echo '<input id="aviflosu_enable_background_images" type="checkbox" name="aviflosu_enable_background_images" value="1" ' . checked(true, $value, false) . ' /> ';
-		echo esc_html__('Replace JPEG background images with AVIF when available', 'avif-local-support');
-		$this->renderHelpTip(__('Works with page builders that set background images via CSS.', 'avif-local-support'));
+		echo '<input id="aviflosu_enable_background_images" type="checkbox" name="aviflosu_enable_background_images" value="1" ' . checked(true, $value, false) . ' />';
 		echo '</label>';
+		echo '<p class="description">' . esc_html__('Use AVIF for CSS background images when an AVIF file exists.', 'avif-local-support') . '</p>';
 	}
 
 	public function renderConvertOnUploadField(): void
 	{
 		$value = (bool) get_option('aviflosu_convert_on_upload', false);
 		echo '<label for="aviflosu_convert_on_upload">';
-		echo '<input id="aviflosu_convert_on_upload" type="checkbox" name="aviflosu_convert_on_upload" value="1" ' . checked(true, $value, false) . ' /> ';
-		echo esc_html__('Convert uploaded JPEG files to AVIF', 'avif-local-support');
-		$this->renderHelpTip(__('Runs in the background via WP-Cron to avoid blocking uploads.', 'avif-local-support'));
+		echo '<input id="aviflosu_convert_on_upload" type="checkbox" name="aviflosu_convert_on_upload" value="1" ' . checked(true, $value, false) . ' />';
 		echo '</label>';
+		echo '<p class="description">' . esc_html__('New JPEG uploads are queued and converted in the background.', 'avif-local-support') . '</p>';
 	}
 
 	public function renderScheduleField(): void
@@ -629,11 +652,11 @@ final class Settings
 		$enabled = (bool) get_option('aviflosu_convert_via_schedule', true);
 		$time = (string) get_option('aviflosu_schedule_time', '01:00');
 		echo '<label for="aviflosu_convert_via_schedule">';
-		echo '<input id="aviflosu_convert_via_schedule" type="checkbox" name="aviflosu_convert_via_schedule" value="1" ' . checked(true, $enabled, false) . ' /> ';
-		echo esc_html__('Scan daily and convert missing AVIF files', 'avif-local-support');
-		$this->renderHelpTip(__('Set the time field to choose when the daily scan runs.', 'avif-local-support'));
+		echo '<input id="aviflosu_convert_via_schedule" type="checkbox" name="aviflosu_convert_via_schedule" value="1" ' . checked(true, $enabled, false) . ' />';
 		echo '</label> ';
-		echo '<input id="aviflosu_schedule_time" type="time" name="aviflosu_schedule_time" value="' . esc_attr($time) . '" aria-label="' . esc_attr__('Daily run time', 'avif-local-support') . '" />';
+		echo '<p class="description">' . esc_html__('Scan media daily and convert any JPEG files still missing AVIF.', 'avif-local-support') . '</p>';
+		echo '<p><label for="aviflosu_schedule_time">' . esc_html__('Run at', 'avif-local-support') . ' </label>';
+		echo '<input id="aviflosu_schedule_time" type="time" name="aviflosu_schedule_time" value="' . esc_attr($time) . '" aria-label="' . esc_attr__('Daily run time', 'avif-local-support') . '" /></p>';
 	}
 
 	public function renderQualityField(): void
